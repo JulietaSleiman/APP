@@ -133,6 +133,8 @@ Authentication: `Authorization: Bearer <jwt_token>` (except public auth endpoint
     "paidById": "usr_101",
     "date": "2026-09-13T11:30:00Z",
     "splitType": "equal",
+    "notes": "Compra semanal de víveres",
+    "receiptData": "data:image/jpeg;base64,... (optional)",
     "splits": [
       { "userId": "usr_101", "shareValue": 1.0 },
       { "userId": "usr_102", "shareValue": 1.0 },
@@ -146,9 +148,24 @@ Authentication: `Authorization: Bearer <jwt_token>` (except public auth endpoint
   - `percentage`: `shareValue` is % (e.g. 50.0). Sum MUST equal 100.0.
   - `shares`: `shareValue` represents weights (e.g. 2 for user A, 1 for user B).
 
+### 3.3 Upload / Attach Receipt (Roadmap #2)
+- **POST** `/groups/{groupId}/expenses/{expenseId}/receipt`
+- **Request Header**: `Content-Type: multipart/form-data` or `application/json` (Base64)
+- **Request Body (multipart)**: `file: binary image (jpeg, png, heic, max 10MB)`
+- **Response `201 Created`**:
+  ```json
+  {
+    "expenseId": "exp_001",
+    "receiptUrl": "https://storage.splitwallet.app/receipts/exp_001_thumb.jpg",
+    "mimeType": "image/jpeg",
+    "fileSizeBytes": 348120,
+    "uploadedAt": "2026-09-13T12:00:00Z"
+  }
+  ```
+
 ---
 
-## 4. Settlements (`/groups/{groupId}/settlements`)
+## 4. Settlements & Payment Methods (`/groups/{groupId}/settlements` - Roadmap #5)
 
 ### 4.1 Record Settlement (Payment)
 - **POST** `/groups/{groupId}/settlements`
@@ -160,7 +177,18 @@ Authentication: `Authorization: Bearer <jwt_token>` (except public auth endpoint
     "amount": "5000.00",
     "currency": "ARS",
     "date": "2026-09-13T12:00:00Z",
-    "note": "Transferencia de saldos"
+    "paymentMethod": "mercado_pago",
+    "paymentReference": "MP-8839210",
+    "alias": "juan.splitwallet.mp",
+    "note": "Transferencia de liquidación de cuentas"
+  }
+  ```
+- **Response `201 Created`**:
+  ```json
+  {
+    "id": "set_001",
+    "status": "confirmed",
+    "settledAt": "2026-09-13T12:00:05Z"
   }
   ```
 
@@ -187,5 +215,27 @@ Authentication: `Authorization: Bearer <jwt_token>` (except public auth endpoint
         ]
       }
     }
+  }
+  ```
+
+---
+
+## 6. Export Summary & Reports (`/groups/{groupId}/export` - Roadmap #3)
+
+### 6.1 Generate Export Payload / PDF Summary
+- **GET** `/groups/{groupId}/export?format=text|pdf`
+- **Response `200 OK`**:
+  ```json
+  {
+    "groupId": "grp_001",
+    "groupName": "Depto con Male",
+    "generatedAt": "2026-09-13T12:30:00Z",
+    "totalSpent": "45000.00",
+    "currency": "ARS",
+    "settlementSummary": [
+      { "from": "Male", "to": "Juan (Tú)", "amount": "7500.00" }
+    ],
+    "shareableText": "📊 *SplitWallet — Resumen Depto con Male*\nTotal gastado: $45.000\n\nLiquidación:\n• Male le debe a Juan: $7.500\n\nGenerado con SplitWallet.",
+    "pdfDownloadUrl": "https://storage.splitwallet.app/reports/grp_001_report.pdf"
   }
   ```

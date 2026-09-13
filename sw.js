@@ -1,7 +1,8 @@
-const CACHE_NAME = 'splitwallet-v1';
+const CACHE_NAME = 'splitwallet-v2';
 const ASSETS = [
   './',
   './index.html',
+  './SplitWallet-Preview.html',
   './manifest.json'
 ];
 
