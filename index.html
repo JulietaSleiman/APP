@@ -59,7 +59,6 @@
       color: #f8fafc;
     }
 
-    /* Ambient background gradient effect */
     .bg-mesh {
       background: 
         radial-gradient(circle at 10% 15%, rgba(99, 102, 241, 0.12) 0%, transparent 40%),
@@ -68,7 +67,6 @@
         #060913;
     }
 
-    /* Desktop frame vs mobile full viewport */
     @media (min-width: 640px) {
       .app-wrapper {
         min-height: 100vh;
@@ -168,21 +166,12 @@
       scrollbar-width: none;
     }
 
-    /* Animation effects */
     @keyframes slideUp {
       from { transform: translateY(100%); opacity: 0; }
       to { transform: translateY(0); opacity: 1; }
     }
     .animate-slide-up {
       animation: slideUp 0.24s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-    }
-
-    @keyframes fadeIn {
-      from { opacity: 0; transform: scale(0.98); }
-      to { opacity: 1; transform: scale(1); }
-    }
-    .animate-fade-in {
-      animation: fadeIn 0.18s ease-out forwards;
     }
 
     @keyframes toastDrop {
@@ -305,8 +294,8 @@
       general: { name: 'General', icon: 'fa-receipt', color: 'text-slate-300', bg: 'bg-slate-500/15', border: 'border-slate-500/30' }
     };
 
-    // PERSISTENCIA LOCAL (Local Storage v2)
-    const STORAGE_KEY = 'splitwallet_v2_data';
+    // PERSISTENCIA LOCAL (Local Storage v3)
+    const STORAGE_KEY = 'splitwallet_v3_data';
 
     function loadInitialState() {
       const saved = localStorage.getItem(STORAGE_KEY);
@@ -316,6 +305,7 @@
       return {
         activeTab: 'groups',
         currentView: 'group-list',
+        groupFilter: 'active', // 'active' | 'archived' (Roadmap #9)
         selectedGroupId: 'grp_1',
         currency: 'ARS',
         currentUser: { id: 'usr_me', name: 'Juan (Tú)', alias: 'juan.splitwallet.mp', cvu: '0000003100091238472910' },
@@ -331,6 +321,7 @@
             icon: 'fa-house',
             tag: 'Roommates',
             currency: '$',
+            isArchived: false,
             members: ['usr_me', 'usr_male'],
             expenses: [
               { 
@@ -338,6 +329,10 @@
                 desc: 'Supermercado Coto', 
                 amount: 32500, 
                 paidBy: 'usr_me', 
+                payers: [{ userId: 'usr_me', amount: 32500 }],
+                participants: ['usr_me', 'usr_male'],
+                tipPercent: 0,
+                tipAmount: 0,
                 category: 'groceries', 
                 date: 'Hoy, 14:20', 
                 hasReceipt: true, 
@@ -349,6 +344,10 @@
                 desc: 'Wifi Fibertel 300MB', 
                 amount: 14800, 
                 paidBy: 'usr_male', 
+                payers: [{ userId: 'usr_male', amount: 14800 }],
+                participants: ['usr_me', 'usr_male'],
+                tipPercent: 0,
+                tipAmount: 0,
                 category: 'utilities', 
                 date: 'Ayer, 10:15', 
                 hasReceipt: false, 
@@ -364,6 +363,7 @@
             icon: 'fa-mountain-sun',
             tag: 'Viaje & Vacaciones',
             currency: '$',
+            isArchived: false,
             members: ['usr_me', 'usr_male', 'usr_pedro'],
             expenses: [
               { 
@@ -371,17 +371,29 @@
                 desc: 'Alquiler Cabaña Los Coihues', 
                 amount: 90000, 
                 paidBy: 'usr_me', 
+                // Roadmap #6: Co-Payers (Múltiples pagadores en un solo gasto)
+                payers: [
+                  { userId: 'usr_me', amount: 60000 },
+                  { userId: 'usr_male', amount: 30000 }
+                ],
+                participants: ['usr_me', 'usr_male', 'usr_pedro'],
+                tipPercent: 0,
+                tipAmount: 0,
                 category: 'accommodation', 
                 date: '12 Sep', 
                 hasReceipt: true, 
-                receiptNote: 'Comprobante Reserva Airbnb',
+                receiptNote: 'Comprobante Reserva Airbnb - Co-Pago',
                 receiptImg: 'https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?w=700&auto=format&fit=crop&q=80' 
               },
               { 
                 id: 'exp_4', 
                 desc: 'Cena Chocolatería Mamuschka', 
-                amount: 33000, 
+                amount: 30000, 
                 paidBy: 'usr_pedro', 
+                payers: [{ userId: 'usr_pedro', amount: 33000 }],
+                participants: ['usr_me', 'usr_male', 'usr_pedro'],
+                tipPercent: 10,
+                tipAmount: 3000,
                 category: 'restaurant', 
                 date: '11 Sep', 
                 hasReceipt: false, 
@@ -433,21 +445,35 @@
       }, 2600);
     }
 
-    // ALGORITMO CONTABLE EXACTO DE SIMPLIFICACIÓN DE DEUDAS
+    // ALGORITMO CONTABLE EXACTO: CO-PAYERS, PARTICIPANTES Y PROPINA
     function calculateGroupBalances(group) {
       const netMap = {};
       group.members.forEach(m => netMap[m] = 0);
 
       group.expenses.forEach(exp => {
-        const count = group.members.length;
-        const share = exp.amount / count;
-        netMap[exp.paidBy] += exp.amount;
-        group.members.forEach(m => netMap[m] -= share);
+        const parts = (exp.participants && exp.participants.length > 0) ? exp.participants : group.members;
+        const count = parts.length;
+        const totalWithTip = exp.amount + (exp.tipAmount || 0);
+        const share = count > 0 ? (totalWithTip / count) : 0;
+
+        // Aporte de Pagadores (Co-Payers o Pagador Único)
+        if (exp.payers && exp.payers.length > 0) {
+          exp.payers.forEach(p => {
+            netMap[p.userId] = (netMap[p.userId] || 0) + p.amount;
+          });
+        } else {
+          netMap[exp.paidBy] = (netMap[exp.paidBy] || 0) + totalWithTip;
+        }
+
+        // Débito a cada participante incluido
+        parts.forEach(m => {
+          netMap[m] = (netMap[m] || 0) - share;
+        });
       });
 
       group.settlements.forEach(set => {
-        netMap[set.from] += set.amount;
-        netMap[set.to] -= set.amount;
+        netMap[set.from] = (netMap[set.from] || 0) + set.amount;
+        netMap[set.to] = (netMap[set.to] || 0) - set.amount;
       });
 
       const debtors = [];
@@ -503,7 +529,6 @@
         }
       }
 
-      // Actualizar Tab Bar UI
       const isGroups = state.activeTab === 'groups';
       document.getElementById('tab-btn-groups').className = isGroups
         ? 'relative py-1.5 px-4 rounded-2xl flex flex-col items-center gap-1 transition-all duration-200 text-brand-400 font-semibold'
@@ -519,12 +544,13 @@
       saveState();
     }
 
-    // PANTALLA 1: LISTADO DE GRUPOS & BALANCE CONSOLIDADO
+    // PANTALLA 1: LISTADO DE GRUPOS, BALANCE CONSOLIDADO & ARCHIVO (Roadmap #9)
     function renderGroupList(container) {
       let totalOwed = 0;
       let totalOwes = 0;
 
-      state.groups.forEach(g => {
+      // Calcular solo de grupos activos
+      state.groups.filter(g => !g.isArchived).forEach(g => {
         const { netMap } = calculateGroupBalances(g);
         const myNet = netMap[state.currentUser.id] || 0;
         if (myNet > 0) totalOwed += myNet;
@@ -533,8 +559,12 @@
 
       const netTotal = totalOwed - totalOwes;
 
+      const activeGroups = state.groups.filter(g => !g.isArchived);
+      const archivedGroups = state.groups.filter(g => g.isArchived);
+      const displayedGroups = state.groupFilter === 'archived' ? archivedGroups : activeGroups;
+
       container.innerHTML = `
-        <!-- Hero Balance Card (Fintech OLED Design) -->
+        <!-- Hero Balance Card -->
         <div class="relative overflow-hidden rounded-3xl p-5 mb-5 border border-white/10 shadow-2xl bg-gradient-to-br from-indigo-950/60 via-slate-900/90 to-[#080d1a]">
           <div class="absolute -right-8 -top-8 w-36 h-36 bg-brand-500/20 rounded-full blur-3xl pointer-events-none"></div>
           
@@ -543,7 +573,7 @@
               <i class="fa-solid fa-wallet text-[10px]"></i> Balance Consolidado
             </span>
             <span class="text-[10px] px-2 py-0.5 rounded-full bg-white/10 font-mono text-slate-300">
-              ${state.groups.length} Grupos
+              ${activeGroups.length} Grupos Activos
             </span>
           </div>
 
@@ -579,17 +609,32 @@
           </div>
         </div>
 
+        <!-- Section Header + Filter Tabs (Roadmap #9: Archivo) + Create Button -->
         <div class="flex justify-between items-center mb-3 px-1">
-          <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
-            <i class="fa-solid fa-users text-[11px] text-indigo-400"></i> Tus Grupos
-          </h2>
+          <!-- Filter Tabs -->
+          <div class="flex p-0.5 rounded-xl bg-white/5 border border-white/10 text-xs">
+            <button onclick="setGroupFilter('active')" class="px-2.5 py-1 rounded-lg font-semibold transition ${state.groupFilter === 'active' ? 'bg-brand-600 text-white shadow' : 'text-slate-400 hover:text-white'}">
+              Activos (${activeGroups.length})
+            </button>
+            <button onclick="setGroupFilter('archived')" class="px-2.5 py-1 rounded-lg font-semibold transition ${state.groupFilter === 'archived' ? 'bg-brand-600 text-white shadow' : 'text-slate-400 hover:text-white'}">
+              Archivados (${archivedGroups.length})
+            </button>
+          </div>
+
           <button onclick="openCreateGroupModal()" class="px-3 py-1.5 rounded-full bg-brand-600 hover:bg-brand-500 text-white text-xs font-semibold flex items-center gap-1.5 shadow-lg shadow-brand-600/30 active:scale-95 transition">
-            <i class="fa-solid fa-plus text-[10px]"></i> Nuevo Grupo
+            <i class="fa-solid fa-plus text-[10px]"></i> Nuevo
           </button>
         </div>
 
+        <!-- Groups Cards List -->
         <div class="space-y-3">
-          ${state.groups.map(g => {
+          ${displayedGroups.length === 0 ? `
+            <div class="p-8 text-center glass-card rounded-3xl border-dashed border-white/10 text-slate-400">
+              <i class="fa-solid ${state.groupFilter === 'archived' ? 'fa-box-archive' : 'fa-users'} text-2xl mb-2 text-slate-500"></i>
+              <p class="text-xs font-semibold text-slate-300">No hay grupos ${state.groupFilter === 'archived' ? 'archivados' : 'activos'}</p>
+              <p class="text-[10px] text-slate-500 mt-0.5">Los grupos que cierren sus cuentas aparecerán aquí.</p>
+            </div>
+          ` : displayedGroups.map(g => {
             const { netMap } = calculateGroupBalances(g);
             const myNet = netMap[state.currentUser.id] || 0;
 
@@ -603,9 +648,15 @@
                     <div>
                       <div class="flex items-center gap-2">
                         <h3 class="font-bold text-sm text-white group-hover:text-indigo-300 transition">${g.name}</h3>
-                        <span class="text-[9px] px-1.5 py-0.5 rounded bg-white/5 border border-white/10 text-slate-400 font-medium">
-                          ${g.tag || 'Compartido'}
-                        </span>
+                        ${g.isArchived ? `
+                          <span class="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 font-semibold flex items-center gap-1">
+                            <i class="fa-solid fa-lock text-[8px]"></i> Cerrado
+                          </span>
+                        ` : `
+                          <span class="text-[9px] px-1.5 py-0.5 rounded bg-white/5 border border-white/10 text-slate-400 font-medium">
+                            ${g.tag || 'Compartido'}
+                          </span>
+                        `}
                       </div>
                       <div class="flex items-center gap-2 mt-1">
                         <div class="flex -space-x-1.5 overflow-hidden">
@@ -618,7 +669,7 @@
                             `;
                           }).join('')}
                         </div>
-                        <span class="text-[10px] text-slate-400">• ${g.expenses.length} gastos cargados</span>
+                        <span class="text-[10px] text-slate-400">• ${g.expenses.length} gastos</span>
                       </div>
                     </div>
                   </div>
@@ -648,38 +699,61 @@
       `;
     }
 
-    // PANTALLA 2: DETALLE DE GRUPO CON HISTORIAL, RECIBOS Y LIQUIDACIÓN RÁPIDA
+    function setGroupFilter(filter) {
+      state.groupFilter = filter;
+      render();
+    }
+
+    // PANTALLA 2: DETALLE DE GRUPO CON HISTORIAL, CO-PAYERS, RECIBOS Y ARCHIVO
     function renderGroupDetail(container) {
       const group = state.groups.find(g => g.id === state.selectedGroupId);
       if (!group) return;
 
       const { netMap, simplified } = calculateGroupBalances(group);
       const myNet = netMap[state.currentUser.id] || 0;
-      const totalGroupSpent = group.expenses.reduce((acc, x) => acc + x.amount, 0);
+      const totalGroupSpent = group.expenses.reduce((acc, x) => acc + x.amount + (x.tipAmount || 0), 0);
+      const canArchive = simplified.length === 0;
 
       container.innerHTML = `
+        <!-- Top Navigation -->
         <div class="flex items-center justify-between mb-3">
           <button onclick="backToGroups()" class="px-3 py-1.5 rounded-full bg-white/5 border border-white/10 text-slate-300 hover:text-white text-xs font-semibold flex items-center gap-1.5 active:scale-95 transition">
             <i class="fa-solid fa-chevron-left text-[10px]"></i> Grupos
           </button>
           
           <div class="flex items-center gap-1.5">
+            <!-- Roadmap #9: Botón Archivar / Reactivar -->
+            <button onclick="toggleArchiveGroup('${group.id}')" title="${group.isArchived ? 'Reabrir grupo' : 'Archivar grupo cerrado'}" class="px-2.5 py-1.5 rounded-full ${group.isArchived ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40' : 'bg-white/5 text-slate-300 border border-white/10'} hover:text-white text-xs font-semibold flex items-center gap-1 active:scale-95 transition">
+              <i class="fa-solid ${group.isArchived ? 'fa-box-open' : 'fa-box-archive'} text-[11px]"></i>
+              <span>${group.isArchived ? 'Reabrir' : 'Archivar'}</span>
+            </button>
+
             <button onclick="openExportModal('${group.id}')" title="Exportar Resumen (Roadmap #3)" class="px-2.5 py-1.5 rounded-full bg-white/5 border border-white/10 text-slate-300 hover:text-white text-xs font-semibold flex items-center gap-1 active:scale-95 transition">
               <i class="fa-solid fa-share-nodes text-[11px] text-brand-400"></i>
               <span>Exportar</span>
             </button>
-            <button onclick="openInviteModal()" class="w-8 h-8 rounded-full bg-white/5 border border-white/10 text-indigo-300 hover:text-white flex items-center justify-center text-xs active:scale-95 transition">
-              <i class="fa-solid fa-user-plus"></i>
-            </button>
+
+            ${!group.isArchived ? `
+              <button onclick="openInviteModal()" class="w-8 h-8 rounded-full bg-white/5 border border-white/10 text-indigo-300 hover:text-white flex items-center justify-center text-xs active:scale-95 transition">
+                <i class="fa-solid fa-user-plus"></i>
+              </button>
+            ` : ''}
           </div>
         </div>
 
+        <!-- Group Title & Member Pills -->
         <div class="mb-4">
           <div class="flex items-center gap-2">
             <h1 class="text-xl font-bold tracking-tight text-white">${group.name}</h1>
-            <span class="text-[10px] px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 font-semibold border border-indigo-500/30">
-              Total: $${totalGroupSpent.toLocaleString('es-AR')}
-            </span>
+            ${group.isArchived ? `
+              <span class="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 font-semibold border border-amber-500/30">
+                Archivado
+              </span>
+            ` : `
+              <span class="text-[10px] px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 font-semibold border border-indigo-500/30">
+                Total: $${totalGroupSpent.toLocaleString('es-AR')}
+              </span>
+            `}
           </div>
           <div class="flex items-center gap-1.5 mt-1.5 overflow-x-auto hide-scrollbar py-0.5">
             ${group.members.map(m => {
@@ -696,6 +770,7 @@
           </div>
         </div>
 
+        <!-- Card de Balance Individual -->
         <div class="glass-card rounded-3xl p-4 text-center mb-4 relative overflow-hidden">
           <div class="absolute inset-0 bg-gradient-to-b from-brand-600/10 via-transparent to-transparent pointer-events-none"></div>
           
@@ -707,16 +782,24 @@
             ${myNet > 0.01 ? 'Te deben en este grupo' : myNet < -0.01 ? 'Tenés saldo a liquidar' : 'Estás al día con todos'}
           </p>
 
-          <div class="grid grid-cols-2 gap-2 mt-4">
-            <button onclick="openAddExpenseModal()" class="w-full bg-brand-600 hover:bg-brand-500 active:scale-95 text-white font-semibold text-xs py-2.5 px-3 rounded-xl shadow-lg shadow-brand-600/30 flex items-center justify-center gap-1.5 transition">
-              <i class="fa-solid fa-plus text-[10px]"></i> Cargar Gasto
-            </button>
-            <button onclick="openSettleModal()" class="w-full bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 text-emerald-300 active:scale-95 font-semibold text-xs py-2.5 px-3 rounded-xl flex items-center justify-center gap-1.5 transition">
-              <i class="fa-solid fa-handshake text-[11px]"></i> Saldar Cuentas
-            </button>
-          </div>
+          <!-- Action Buttons Bar (Deshabilitados si el grupo está archivado) -->
+          ${group.isArchived ? `
+            <div class="mt-3 p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-200">
+              <i class="fa-solid fa-lock text-[10px] mr-1"></i> Grupo cerrado. Reabrí para agregar nuevos gastos.
+            </div>
+          ` : `
+            <div class="grid grid-cols-2 gap-2 mt-4">
+              <button onclick="openAddExpenseModal()" class="w-full bg-brand-600 hover:bg-brand-500 active:scale-95 text-white font-semibold text-xs py-2.5 px-3 rounded-xl shadow-lg shadow-brand-600/30 flex items-center justify-center gap-1.5 transition">
+                <i class="fa-solid fa-plus text-[10px]"></i> Cargar Gasto
+              </button>
+              <button onclick="openSettleModal()" class="w-full bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 text-emerald-300 active:scale-95 font-semibold text-xs py-2.5 px-3 rounded-xl flex items-center justify-center gap-1.5 transition">
+                <i class="fa-solid fa-handshake text-[11px]"></i> Saldar Cuentas
+              </button>
+            </div>
+          `}
         </div>
 
+        <!-- Plan de Liquidación Simplificada -->
         ${simplified.length > 0 ? `
           <div class="mb-4">
             <div class="flex items-center justify-between mb-2">
@@ -747,7 +830,7 @@
 
                     <div class="flex items-center gap-2">
                       <span class="font-mono font-bold text-brand-400">$${s.amount.toLocaleString('es-AR')}</span>
-                      ${isMePayer ? `
+                      ${isMePayer && !group.isArchived ? `
                         <button onclick="quickPay('${s.to}', ${s.amount})" class="px-2 py-1 rounded-lg bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 text-[10px] font-bold hover:bg-emerald-500/30 active:scale-95 transition">
                           Pagar
                         </button>
@@ -760,6 +843,7 @@
           </div>
         ` : ''}
 
+        <!-- Historial de Gastos con Co-Payers y Recibos -->
         <div>
           <div class="flex items-center justify-between mb-2">
             <h3 class="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
@@ -771,8 +855,11 @@
           <div class="space-y-2">
             ${group.expenses.map(e => {
               const cat = CATEGORIES[e.category] || CATEGORIES.general;
-              const payer = getUser(e.paidBy);
-              const splitPerMember = (e.amount / group.members.length);
+              const hasCoPayers = e.payers && e.payers.length > 1;
+              const payerName = hasCoPayers ? 'Co-pago (' + e.payers.length + ')' : getUser(e.paidBy).name;
+              const parts = (e.participants && e.participants.length > 0) ? e.participants : group.members;
+              const totalCost = e.amount + (e.tipAmount || 0);
+              const splitPerMember = totalCost / parts.length;
 
               return `
                 <div onclick="openExpenseDetailModal('${group.id}', '${e.id}')" class="glass-card hover:border-white/20 active:scale-[0.99] rounded-2xl p-3 flex items-center justify-between cursor-pointer transition">
@@ -781,8 +868,13 @@
                       <i class="fa-solid ${cat.icon}"></i>
                     </div>
                     <div>
-                      <div class="flex items-center gap-1.5">
+                      <div class="flex items-center gap-1.5 flex-wrap">
                         <p class="text-xs font-bold text-white leading-tight">${e.desc}</p>
+                        ${hasCoPayers ? `
+                          <span class="px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 text-[9px] font-semibold border border-emerald-500/30 flex items-center gap-1">
+                            <i class="fa-solid fa-people-group text-[8px]"></i> Co-pago
+                          </span>
+                        ` : ''}
                         ${e.hasReceipt ? `
                           <span class="px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 text-[9px] font-semibold border border-indigo-500/30 flex items-center gap-1">
                             <i class="fa-solid fa-paperclip text-[8px]"></i> Ticket
@@ -790,13 +882,13 @@
                         ` : ''}
                       </div>
                       <p class="text-[10px] text-slate-400 mt-0.5">
-                        Pagó <span class="font-medium text-slate-300">${payer.name}</span> • Tu parte: <span class="font-mono text-slate-300">$${splitPerMember.toLocaleString('es-AR')}</span> • ${e.date}
+                        Pagó <span class="font-medium text-slate-300">${payerName}</span> • Tu parte: <span class="font-mono text-slate-300">$${splitPerMember.toLocaleString('es-AR')}</span> • ${e.date}
                       </p>
                     </div>
                   </div>
 
                   <div class="text-right">
-                    <span class="text-xs font-mono font-bold text-white block">$${e.amount.toLocaleString('es-AR')}</span>
+                    <span class="text-xs font-mono font-bold text-white block">$${totalCost.toLocaleString('es-AR')}</span>
                     <span class="text-[9px] text-slate-400">${cat.name}</span>
                   </div>
                 </div>
@@ -807,7 +899,26 @@
       `;
     }
 
-    // PANTALLA 3: PESTAÑA MIS GASTOS (Personal Expenses - Roadmap #1 elevado)
+    function toggleArchiveGroup(groupId) {
+      const group = state.groups.find(g => g.id === groupId);
+      if (!group) return;
+
+      if (!group.isArchived) {
+        const { simplified } = calculateGroupBalances(group);
+        if (simplified.length > 0) {
+          showToast('Para archivar, primero salden las deudas pendientes', 'info');
+          return;
+        }
+        group.isArchived = true;
+        showToast('Grupo cerrado y archivado', 'success');
+      } else {
+        group.isArchived = false;
+        showToast('Grupo reabierto con éxito', 'success');
+      }
+      render();
+    }
+
+    // PANTALLA 3: PESTAÑA MIS GASTOS
     function renderPersonalTab(container) {
       const totalPersonal = state.personalExpenses.reduce((acc, x) => acc + x.amount, 0);
 
@@ -904,11 +1015,16 @@
       `;
     }
 
-    // MODAL SYSTEM (iOS Bottom Sheet)
+    // MODAL SYSTEM
     let tempReceiptBase64 = null;
+    let currentPayerMode = 'single'; // 'single' | 'multi'
+    let selectedTipPercent = 0;
 
     function openModal(title, formHtml, confirmActionText, onConfirm) {
       tempReceiptBase64 = null;
+      currentPayerMode = 'single';
+      selectedTipPercent = 0;
+
       const modal = document.getElementById('modal-container');
       modal.innerHTML = `
         <div class="w-full max-h-[85vh] overflow-y-auto hide-scrollbar glass-panel border-t border-white/10 rounded-t-[32px] p-5 shadow-2xl animate-slide-up bg-[#0c1222]">
@@ -944,7 +1060,7 @@
       tempReceiptBase64 = null;
     }
 
-    // ROADMAP #2: SUBIDA Y ADJUNTO DE COMPROBANTES
+    // ROADMAP #2: SUBIDA DE COMPROBANTES
     function handleReceiptUpload(event) {
       const file = event.target.files[0];
       if (!file) return;
@@ -981,7 +1097,7 @@
       if (uploadButtonLabel) uploadButtonLabel.innerText = "Adjuntar Foto de Ticket";
     }
 
-    // MODAL: CARGAR GASTO COMPARTIDO (CON ADJUNTO DE RECIBO ROADMAP #2)
+    // MODAL: CARGAR GASTO CON CO-PAYERS (Roadmap #6) Y PROPINA (Roadmap #4)
     function openAddExpenseModal() {
       const group = state.groups.find(g => g.id === state.selectedGroupId);
       if (!group) return;
@@ -989,10 +1105,10 @@
       const formHtml = `
         <div class="space-y-3.5 text-xs">
           <div>
-            <label class="block text-slate-400 font-semibold mb-1">Monto del Gasto ($)</label>
+            <label class="block text-slate-400 font-semibold mb-1">Monto Base del Gasto ($)</label>
             <div class="relative">
               <span class="absolute left-3.5 top-1/2 -translate-y-1/2 font-mono font-bold text-slate-400 text-lg">$</span>
-              <input id="input-exp-amount" type="number" placeholder="0.00" class="w-full pl-8 pr-4 py-3 rounded-2xl bg-surface-base border border-white/10 text-white font-mono font-bold text-xl focus:border-brand-500 focus:ring-1 focus:ring-brand-500 outline-none transition">
+              <input id="input-exp-amount" type="number" placeholder="0.00" oninput="updateModalTotals()" class="w-full pl-8 pr-4 py-3 rounded-2xl bg-surface-base border border-white/10 text-white font-mono font-bold text-xl focus:border-brand-500 focus:ring-1 focus:ring-brand-500 outline-none transition">
             </div>
           </div>
 
@@ -1010,18 +1126,64 @@
             </select>
           </div>
 
+          <!-- Roadmap #4: Selector de Propina / Servicio -->
           <div>
-            <label class="block text-slate-400 font-semibold mb-1">¿Quién pagó el monto total?</label>
-            <select id="input-exp-payer" class="w-full px-3.5 py-2.5 rounded-xl bg-surface-base border border-white/10 text-white focus:border-brand-500 outline-none">
-              ${group.members.map(m => `
-                <option value="${m}" ${m === state.currentUser.id ? 'selected' : ''}>${getUser(m).name}</option>
+            <div class="flex justify-between items-center mb-1">
+              <label class="text-slate-400 font-semibold">Propina / Servicio</label>
+              <span id="tip-amount-preview" class="font-mono text-emerald-400 font-bold">+$0</span>
+            </div>
+            <div class="grid grid-cols-4 gap-1.5">
+              ${[0, 10, 15, 20].map(pct => `
+                <button type="button" onclick="selectTip(${pct})" id="tip-btn-${pct}" class="py-1.5 rounded-xl border ${pct === 0 ? 'bg-brand-600 border-brand-500 text-white' : 'bg-white/5 border-white/10 text-slate-300'} font-semibold text-xs active:scale-95 transition">
+                  ${pct === 0 ? 'Sin propina' : pct + '%'}
+                </button>
               `).join('')}
-            </select>
+            </div>
           </div>
 
+          <!-- Roadmap #6: Co-Payers (Pagador Único vs Múltiples Pagadores) -->
+          <div class="pt-1">
+            <label class="block text-slate-400 font-semibold mb-1.5">¿Quién pagó?</label>
+            
+            <div class="flex p-1 bg-surface-base rounded-xl border border-white/10 mb-2">
+              <button id="btn-payer-single" type="button" onclick="setPayerMode('single')" class="flex-1 py-1.5 rounded-lg text-xs font-semibold bg-brand-600 text-white transition">
+                Pagador Único
+              </button>
+              <button id="btn-payer-multi" type="button" onclick="setPayerMode('multi')" class="flex-1 py-1.5 rounded-lg text-xs font-semibold text-slate-400 hover:text-white transition">
+                Múltiples (Co-Payers)
+              </button>
+            </div>
+
+            <!-- Single Payer Select -->
+            <div id="box-payer-single">
+              <select id="input-exp-payer" class="w-full px-3.5 py-2.5 rounded-xl bg-surface-base border border-white/10 text-white focus:border-brand-500 outline-none">
+                ${group.members.map(m => `
+                  <option value="${m}" ${m === state.currentUser.id ? 'selected' : ''}>${getUser(m).name}</option>
+                `).join('')}
+              </select>
+            </div>
+
+            <!-- Multi Payers Grid -->
+            <div id="box-payer-multi" class="hidden space-y-2">
+              ${group.members.map(m => `
+                <div class="flex items-center justify-between gap-2 p-2 rounded-xl bg-white/5 border border-white/5">
+                  <span class="text-xs font-medium text-slate-200">${getUser(m).name}</span>
+                  <div class="relative w-32">
+                    <span class="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 font-mono text-xs">$</span>
+                    <input type="number" id="input-copayer-${m}" placeholder="0" class="w-full pl-6 pr-2 py-1.5 rounded-lg bg-surface-base border border-white/10 text-white font-mono text-xs text-right focus:border-brand-500 outline-none" oninput="updateCoPayerSum()" />
+                  </div>
+                </div>
+              `).join('')}
+              <div id="copayers-status" class="text-[11px] font-mono text-slate-400 text-right">
+                Suma aportada: $0 / $0
+              </div>
+            </div>
+          </div>
+
+          <!-- Roadmap #2: Adjunto de Comprobante -->
           <div class="pt-1">
             <label class="block text-slate-400 font-semibold mb-1.5 flex items-center gap-1.5">
-              <i class="fa-solid fa-camera text-brand-400"></i> Comprobante o Foto de Ticket (Roadmap #2)
+              <i class="fa-solid fa-camera text-brand-400"></i> Comprobante o Foto de Ticket
             </label>
             
             <input type="file" id="input-exp-file" accept="image/*" class="hidden" onchange="handleReceiptUpload(event)" />
@@ -1037,12 +1199,11 @@
       `;
 
       openModal('Cargar Gasto Compartido', formHtml, 'Guardar Gasto', () => {
-        const amount = parseFloat(document.getElementById('input-exp-amount').value);
+        const baseAmount = parseFloat(document.getElementById('input-exp-amount').value);
         const desc = document.getElementById('input-exp-desc').value.trim();
         const cat = document.getElementById('input-exp-cat').value;
-        const payer = document.getElementById('input-exp-payer').value;
 
-        if (!amount || amount <= 0) {
+        if (!baseAmount || baseAmount <= 0) {
           showToast('Ingresá un monto válido mayor a 0', 'info');
           return false;
         }
@@ -1051,11 +1212,41 @@
           return false;
         }
 
+        const tipAmount = Math.round(baseAmount * (selectedTipPercent / 100));
+        const totalAmount = baseAmount + tipAmount;
+
+        let payersArray = [];
+        let primaryPayer = state.currentUser.id;
+
+        if (currentPayerMode === 'multi') {
+          let sumAportes = 0;
+          for (const m of group.members) {
+            const inputVal = parseFloat(document.getElementById(`input-copayer-${m}`).value) || 0;
+            if (inputVal > 0) {
+              payersArray.push({ userId: m, amount: inputVal });
+              sumAportes += inputVal;
+            }
+          }
+
+          if (Math.abs(sumAportes - totalAmount) > 1) {
+            showToast(`La suma de aportes ($${sumAportes}) debe igualar al total ($${totalAmount})`, 'info');
+            return false;
+          }
+          primaryPayer = payersArray[0].userId;
+        } else {
+          primaryPayer = document.getElementById('input-exp-payer').value;
+          payersArray = [{ userId: primaryPayer, amount: totalAmount }];
+        }
+
         group.expenses.unshift({
           id: 'exp_' + Date.now(),
           desc: desc,
-          amount: amount,
-          paidBy: payer,
+          amount: baseAmount,
+          tipPercent: selectedTipPercent,
+          tipAmount: tipAmount,
+          paidBy: primaryPayer,
+          payers: payersArray,
+          participants: group.members,
           category: cat,
           date: 'Hoy',
           hasReceipt: !!tempReceiptBase64,
@@ -1069,7 +1260,69 @@
       });
     }
 
-    // MODAL: DETALLE Y VISUALIZADOR DE COMPROBANTES (Roadmap #2)
+    function setPayerMode(mode) {
+      currentPayerMode = mode;
+      const isMulti = mode === 'multi';
+      document.getElementById('btn-payer-single').className = !isMulti
+        ? 'flex-1 py-1.5 rounded-lg text-xs font-semibold bg-brand-600 text-white transition'
+        : 'flex-1 py-1.5 rounded-lg text-xs font-semibold text-slate-400 hover:text-white transition';
+      
+      document.getElementById('btn-payer-multi').className = isMulti
+        ? 'flex-1 py-1.5 rounded-lg text-xs font-semibold bg-brand-600 text-white transition'
+        : 'flex-1 py-1.5 rounded-lg text-xs font-semibold text-slate-400 hover:text-white transition';
+
+      document.getElementById('box-payer-single').classList.toggle('hidden', isMulti);
+      document.getElementById('box-payer-multi').classList.toggle('hidden', !isMulti);
+      updateCoPayerSum();
+    }
+
+    function selectTip(pct) {
+      selectedTipPercent = pct;
+      [0, 10, 15, 20].forEach(p => {
+        const btn = document.getElementById(`tip-btn-${p}`);
+        if (btn) {
+          btn.className = p === pct
+            ? 'py-1.5 rounded-xl border bg-brand-600 border-brand-500 text-white font-semibold text-xs active:scale-95 transition'
+            : 'py-1.5 rounded-xl border bg-white/5 border-white/10 text-slate-300 font-semibold text-xs active:scale-95 transition';
+        }
+      });
+      updateModalTotals();
+    }
+
+    function updateModalTotals() {
+      const base = parseFloat(document.getElementById('input-exp-amount').value) || 0;
+      const tip = Math.round(base * (selectedTipPercent / 100));
+      const tipElem = document.getElementById('tip-amount-preview');
+      if (tipElem) tipElem.innerText = `+$${tip.toLocaleString('es-AR')}`;
+      updateCoPayerSum();
+    }
+
+    function updateCoPayerSum() {
+      const group = state.groups.find(g => g.id === state.selectedGroupId);
+      if (!group) return;
+
+      const base = parseFloat(document.getElementById('input-exp-amount').value) || 0;
+      const tip = Math.round(base * (selectedTipPercent / 100));
+      const totalExpected = base + tip;
+
+      let sum = 0;
+      group.members.forEach(m => {
+        const inp = document.getElementById(`input-copayer-${m}`);
+        if (inp) sum += (parseFloat(inp.value) || 0);
+      });
+
+      const statusElem = document.getElementById('copayers-status');
+      if (statusElem) {
+        const diff = totalExpected - sum;
+        if (Math.abs(diff) <= 0.01 && totalExpected > 0) {
+          statusElem.innerHTML = `<span class="text-emerald-400 font-bold">✓ Suma exacta: $${sum.toLocaleString('es-AR')}</span>`;
+        } else {
+          statusElem.innerHTML = `Suma: $${sum.toLocaleString('es-AR')} / $${totalExpected.toLocaleString('es-AR')} <span class="text-rose-400">(Faltan $${Math.max(0, diff).toLocaleString('es-AR')})</span>`;
+        }
+      }
+    }
+
+    // MODAL: DETALLE Y VISUALIZADOR DE COMPROBANTES CON CO-PAYERS
     function openExpenseDetailModal(groupId, expenseId) {
       const group = state.groups.find(g => g.id === groupId);
       if (!group) return;
@@ -1077,8 +1330,10 @@
       if (!expense) return;
 
       const cat = CATEGORIES[expense.category] || CATEGORIES.general;
-      const payer = getUser(expense.paidBy);
-      const splitPerMember = (expense.amount / group.members.length);
+      const totalCost = expense.amount + (expense.tipAmount || 0);
+      const parts = (expense.participants && expense.participants.length > 0) ? expense.participants : group.members;
+      const splitPerMember = totalCost / parts.length;
+      const hasCoPayers = expense.payers && expense.payers.length > 1;
 
       const formHtml = `
         <div class="space-y-4 text-xs">
@@ -1094,17 +1349,44 @@
 
           <div class="grid grid-cols-2 gap-2 text-center">
             <div class="p-3 rounded-xl bg-white/5 border border-white/10">
-              <p class="text-[10px] text-slate-400">Total Pagado</p>
-              <p class="text-base font-mono font-bold text-white">$${expense.amount.toLocaleString('es-AR')}</p>
-              <p class="text-[9px] text-slate-400 mt-0.5">por ${payer.name}</p>
+              <p class="text-[10px] text-slate-400">Gasto Total</p>
+              <p class="text-base font-mono font-bold text-white">$${totalCost.toLocaleString('es-AR')}</p>
+              ${expense.tipAmount > 0 ? `<p class="text-[9px] text-emerald-400 mt-0.5">(incluye $${expense.tipAmount} propina)</p>` : ''}
             </div>
             <div class="p-3 rounded-xl bg-white/5 border border-white/10">
               <p class="text-[10px] text-slate-400">Tu Parte</p>
               <p class="text-base font-mono font-bold text-brand-400">$${splitPerMember.toLocaleString('es-AR')}</p>
-              <p class="text-[9px] text-slate-400 mt-0.5">(${group.members.length} participantes)</p>
+              <p class="text-[9px] text-slate-400 mt-0.5">(${parts.length} participantes)</p>
             </div>
           </div>
 
+          <!-- Desglose de Pagadores (Roadmap #6) -->
+          <div class="p-3 rounded-2xl bg-white/5 border border-white/10">
+            <p class="font-semibold text-slate-300 mb-2 flex items-center gap-1.5">
+              <i class="fa-solid fa-credit-card text-brand-400"></i> ${hasCoPayers ? 'Co-Pagadores (Aportes compartidos)' : 'Pagado por'}
+            </p>
+            ${hasCoPayers ? `
+              <div class="space-y-1.5">
+                ${expense.payers.map(p => {
+                  const u = getUser(p.userId);
+                  const pct = Math.round((p.amount / totalCost) * 100);
+                  return `
+                    <div class="flex items-center justify-between text-xs">
+                      <span class="text-slate-200">${u.name}</span>
+                      <span class="font-mono font-bold text-white">$${p.amount.toLocaleString('es-AR')} <span class="text-slate-400 font-normal">(${pct}%)</span></span>
+                    </div>
+                  `;
+                }).join('')}
+              </div>
+            ` : `
+              <div class="flex items-center justify-between text-xs">
+                <span class="text-slate-200">${getUser(expense.paidBy).name}</span>
+                <span class="font-mono font-bold text-white">100% del pago</span>
+              </div>
+            `}
+          </div>
+
+          <!-- Comprobante / Ticket -->
           <div>
             <p class="font-semibold text-slate-300 mb-2 flex items-center gap-1.5">
               <i class="fa-solid fa-receipt text-indigo-400"></i> Comprobante Adjunto
@@ -1130,13 +1412,13 @@
       openModal('Detalle del Gasto', formHtml, 'Cerrar', () => true);
     }
 
-    // MODAL: EXPORTAR RESUMEN (Roadmap #3 - Editorial WhatsApp / PDF Summary)
+    // MODAL: EXPORTAR RESUMEN (Roadmap #3)
     function openExportModal(groupId) {
       const group = state.groups.find(g => g.id === groupId);
       if (!group) return;
 
       const { simplified } = calculateGroupBalances(group);
-      const totalGroupSpent = group.expenses.reduce((acc, x) => acc + x.amount, 0);
+      const totalGroupSpent = group.expenses.reduce((acc, x) => acc + x.amount + (x.tipAmount || 0), 0);
 
       let summaryText = `📊 *SplitWallet — Resumen de Cuentas: ${group.name}*\n`;
       summaryText += `💰 *Gasto Total del Grupo:* $${totalGroupSpent.toLocaleString('es-AR')}\n\n`;
@@ -1203,7 +1485,7 @@
           <div class="grid grid-cols-2 gap-2">
             <div>
               <label class="block text-slate-400 font-semibold mb-1">¿Quién transfiere?</label>
-              <select id="input-set-from" class="w-full px-3.5 py-2.5 rounded-xl bg-surface-base border border-white/10 text-white outline-none" onchange="updateSettlementAlias()">
+              <select id="input-set-from" class="w-full px-3 py-2 rounded-xl bg-surface-base border border-white/10 text-white outline-none" onchange="updateSettlementAlias()">
                 ${group.members.map(m => `
                   <option value="${m}" ${m === state.currentUser.id ? 'selected' : ''}>${getUser(m).name}</option>
                 `).join('')}
@@ -1211,7 +1493,7 @@
             </div>
             <div>
               <label class="block text-slate-400 font-semibold mb-1">¿Quién recibe?</label>
-              <select id="input-set-to" class="w-full px-3.5 py-2.5 rounded-xl bg-surface-base border border-white/10 text-white outline-none" onchange="updateSettlementAlias()">
+              <select id="input-set-to" class="w-full px-3 py-2 rounded-xl bg-surface-base border border-white/10 text-white outline-none" onchange="updateSettlementAlias()">
                 ${group.members.map((m, i) => `
                   <option value="${m}" ${(prefillTo ? m === prefillTo : i === 1) ? 'selected' : ''}>${getUser(m).name}</option>
                 `).join('')}
@@ -1322,6 +1604,7 @@
           icon: icon,
           tag: 'Nuevo',
           currency: '$',
+          isArchived: false,
           members: ['usr_me', 'usr_male'],
           expenses: [],
           settlements: []
@@ -1415,7 +1698,16 @@
               <span class="text-emerald-400 font-bold">✓ Caso #3:</span> Exportación editorial para WhatsApp.
             </li>
             <li class="p-2 rounded-xl bg-white/5 border border-white/5">
+              <span class="text-emerald-400 font-bold">✓ Caso #4:</span> Desglose de consumo y propinas (% / servicio).
+            </li>
+            <li class="p-2 rounded-xl bg-white/5 border border-white/5">
               <span class="text-emerald-400 font-bold">✓ Caso #5:</span> Liquidación con Alias y CVU local.
+            </li>
+            <li class="p-2 rounded-xl bg-white/5 border border-white/5">
+              <span class="text-emerald-400 font-bold">✓ Caso #6:</span> Múltiples pagadores en un gasto (Co-Payers).
+            </li>
+            <li class="p-2 rounded-xl bg-white/5 border border-white/5">
+              <span class="text-emerald-400 font-bold">✓ Caso #9:</span> Cierre y archivo de grupos con cuentas en cero.
             </li>
           </ul>
         </div>

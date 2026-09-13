@@ -1,4 +1,4 @@
-const CACHE_NAME = 'splitwallet-v2';
+const CACHE_NAME = 'splitwallet-v3';
 const ASSETS = [
   './',
   './index.html',

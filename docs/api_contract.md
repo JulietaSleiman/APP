@@ -88,7 +88,24 @@ Authentication: `Authorization: Bearer <jwt_token>` (except public auth endpoint
 
 ### 2.3 Group Details
 - **GET** `/groups/{groupId}`
-- **Response `200 OK`**: Returns group metadata and participant list.
+- **Response `200 OK`**: Returns group metadata, participant list, and `isArchived` flag.
+
+### 2.4 Archive Group (Roadmap #9)
+- **POST** `/groups/{groupId}/archive`
+- **Condition**: All balances in the group must be settled ($0.00). If debts remain, returns `422 Unprocessable Entity`.
+- **Response `200 OK`**:
+  ```json
+  {
+    "id": "grp_001",
+    "name": "Depto con Male",
+    "isArchived": true,
+    "archivedAt": "2026-09-13T13:00:00Z"
+  }
+  ```
+
+### 2.5 Unarchive Group
+- **POST** `/groups/{groupId}/unarchive`
+- **Response `200 OK`**: Reopens group to active status.
 
 ---
 
@@ -107,12 +124,17 @@ Authentication: `Authorization: Bearer <jwt_token>` (except public auth endpoint
       "currency": "ARS",
       "category": "groceries",
       "paidById": "usr_101",
+      "payers": [
+        { "userId": "usr_101", "amount": "60.00" },
+        { "userId": "usr_102", "amount": "40.00" }
+      ],
       "date": "2026-09-13T11:30:00Z",
       "splitType": "equal",
+      "tipPercent": 10,
+      "tipAmount": "10.00",
       "splits": [
-        { "userId": "usr_101", "computedAmount": "33.34", "shareValue": 1.0 },
-        { "userId": "usr_102", "computedAmount": "33.33", "shareValue": 1.0 },
-        { "userId": "usr_103", "computedAmount": "33.33", "shareValue": 1.0 }
+        { "userId": "usr_101", "computedAmount": "55.00", "shareValue": 1.0 },
+        { "userId": "usr_102", "computedAmount": "55.00", "shareValue": 1.0 }
       ],
       "receiptUrl": null,
       "createdAt": "2026-09-13T11:30:00Z",
@@ -121,27 +143,37 @@ Authentication: `Authorization: Bearer <jwt_token>` (except public auth endpoint
   ]
   ```
 
-### 3.2 Create Expense
+### 3.2 Create Expense (With Co-Payers & Tip Support - Roadmap #6 & #4)
 - **POST** `/groups/{groupId}/expenses`
 - **Request Body**:
   ```json
   {
-    "description": "Supermercado Coto",
-    "amount": "100.00",
+    "description": "Cena & Bebidas",
+    "amount": "20000.00",
     "currency": "ARS",
-    "category": "groceries",
+    "category": "restaurant",
     "paidById": "usr_101",
+    "payers": [
+      { "userId": "usr_101", "amount": "12000.00" },
+      { "userId": "usr_102", "amount": "8000.00" }
+    ],
+    "tipPercent": 10,
+    "tipAmount": "2000.00",
     "date": "2026-09-13T11:30:00Z",
     "splitType": "equal",
-    "notes": "Compra semanal de víveres",
+    "notes": "Cena compartida con co-pago",
     "receiptData": "data:image/jpeg;base64,... (optional)",
+    "participantUserIds": ["usr_101", "usr_102"],
     "splits": [
       { "userId": "usr_101", "shareValue": 1.0 },
-      { "userId": "usr_102", "shareValue": 1.0 },
-      { "userId": "usr_103", "shareValue": 1.0 }
+      { "userId": "usr_102", "shareValue": 1.0 }
     ]
   }
   ```
+- **Rules on Payers (Roadmap #6)**:
+  - If `payers` is provided, sum of payer amounts MUST equal `amount`.
+  - If `payers` is empty/omitted, the entire `amount` is attributed to `paidById`.
+  - If group is archived (`isArchived == true`), request fails with `409 Conflict: GROUP_ARCHIVED`.
 - **Rules on Splits**:
   - `equal`: `shareValue` ignored or 1.0. App divides equal parts and server validates.
   - `exact`: `shareValue` is the exact amount. Sum MUST equal `amount`.
